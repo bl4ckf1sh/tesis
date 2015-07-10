@@ -1,0 +1,207 @@
+#!/usr/bin/env python
+
+"""
+"""
+try:
+    import matplotlib.pyplot as plt
+except:
+    raise
+
+import networkx as nx
+import numpy as np
+import itertools
+from random import randint
+import datetime
+
+from mod_mongo import new_mongo_conn as nmc 			
+	# def new_mongo_conn(db,server,port):
+
+from mod_mongo import load_from_mongo as lfm
+	# def load_from_mongo(mongo_db_coll, return_cursor=False,criteria=None, projection=None):
+
+from mod_info import users
+from mod_info import users_by_groups
+
+def coorpol(i=None,n=None):
+	if n > 0 and i <= n:
+		cp = (10 * n * np.cos(np.pi*2*i/n),10 * n * np.sin(np.pi*2*i/n))
+		return cp
+
+
+
+#server='192.168.1.10'
+server='localhost'
+port='27017'
+
+db = nmc(db='twitter',server=server,port=port)
+coll_f = db['followers']
+coll_fof = db['followers_of_followers']
+
+
+
+edge_labels = {}
+
+
+nodos_c = [] # Candidatos
+nodos_f1 = [] # Seguidores de los candidatos
+nodos_f2 = [] # Seguidores de los Seguidores (2do nivel)
+
+print(str(datetime.datetime.now())+': Starting!')
+
+pipeline = [{'$group':{ '_id': '$candidate','size':{'$sum':1}}}]
+results = coll_fof.aggregate(pipeline=pipeline)
+for i in results:
+	nodos_c.append({'name':i['_id'], 'size':i['size']})
+
+#print nodos_c
+
+print(str(datetime.datetime.now())+': Candidates (nodes) done!')
+
+for candidate in nodos_c:
+	pipeline = [
+				{'$match':{'candidate':candidate['name']}},
+				{'$group':{ '_id': {'follower1':'$follower1','candidate':'$candidate'},'size':{'$sum':1}}}
+				]
+	results = coll_fof.aggregate(pipeline=pipeline)
+	for i in results:
+		nodos_f1.append({'name':i['_id']['follower1'], 'size':i['size'], 'candidate':i['_id']['candidate']})
+
+#print nodos_f1
+
+print(str(datetime.datetime.now())+': Followers (nodes) done!')
+
+edges_f1_f1 = []
+
+for candidate in nodos_c:
+	#CB.F1
+	n_cand = [x['name'] for x in nodos_c]
+	n_cand.remove(candidate['name'])
+	pipeline_B1 = [{'$match':{'screen_name':candidate['name']}},{'$group':{ '_id': {'follower1':'$follower_id'}}}]
+	results_B1 = coll_f.aggregate(pipeline=pipeline_B1,allowDiskUse=True)
+	print(str(datetime.datetime.now())+': Collecting F1 done! -'+candidate['name'])
+	pipeline_A2 = [
+					{'$match':
+						{'candidate':
+							{'$in':n_cand}
+						}
+					},
+					{'$group':{ '_id': {'follower1':'$follower1','follower2':'$follower2'}}}
+					]
+	results_A2 = coll_fof.aggregate(pipeline=pipeline_A2,allowDiskUse=True)
+	#print results_A2
+	print(str(datetime.datetime.now())+': Collecting F2 done! -'+candidate['name'])	
+	for B1 in results_B1:
+		for A2 in results_A2:
+			if B1['_id']['follower1'] == A2['_id']['follower2']: 
+				edges_f1_f1.append((B1['_id']['follower1'],A2['_id']['follower1']))
+	print(str(datetime.datetime.now())+': Linking F1 to F1 done! -'+candidate['name'])
+
+#print edges_f1_f1
+print(str(datetime.datetime.now())+': F1 to F1 (edges) done!')
+
+"""
+# Se crea el grafo vacio
+G=nx.Graph()
+
+# Se agregan los nodos
+
+G.add_nodes_from([node['name'] for node in nodos_c])
+#G.add_nodes_from([node['name'] for node in nodos_f1])
+
+
+print G.nodes()
+
+pos = {}
+
+
+for j in range(len(nodos_c)):
+	pos.update({nodos_c[j]['name']:coorpol(j,len(nodos_c))})
+
+print pos
+
+
+
+#pos = nx.spring_layout(G, dim=2, iterations=50)
+
+# nodes
+nx.draw_networkx_nodes(G,pos,node_shape='8',node_size=1500,node_color='r',nodelist=[node['name'] for node in nodos_c])
+#nx.draw_networkx_nodes(G,pos,node_shape='o',node_size=650,node_color='b',nodelist=[node['name'] for node in nodos_f1])
+
+
+# edges
+#nx.draw_networkx_edges(G,pos,edgelist=edges_c_f1,edge_color='g',width=1)
+#nx.draw_networkx_edges(G,pos,edgelist=edges_f1_f1,edge_color='b',width=10)
+#nx.draw_networkx_labels(G,pos,font_size=6,font_family='sans-serif')
+
+
+plt.axis('off')
+#plt.show()
+
+file_name = './img/fof.png'
+
+plt.savefig(file_name, dpi=200) # save as png
+
+
+
+nodos_f = []
+edges = []
+# Arma las conexiones entre los candidatos y los followers
+i = 0
+for follower in followers:
+	i += 1
+	if i > 100: break
+	nodos_f.append(follower['_id'])
+	for candidate in follower['uniqueIds']:
+		edge_labels.update ({(candidate,follower['_id']):1})
+		edges.append((candidate,follower['_id']))
+
+nodos_c = users()
+
+#print nodos_f
+#print nodos_c
+
+# Se crea el grafo vacio
+G=nx.Graph()
+
+# Se agregan los nodos
+for node in nodos_c:
+	G.add_node(node)
+for node in nodos_f:
+	G.add_node(node)
+
+
+#pos=nx.circular_layout(G)
+
+#pos=nx.spring_layout(G)
+#pos=nx.random_layout(G, iterations=50)
+pos = nx.spring_layout(G, dim=2, iterations=500)
+
+
+plt.figure(figsize=(100,100))
+
+# nodes
+nx.draw_networkx_nodes(G,pos,node_shape='o',node_size=300,node_color='r',nodelist=nodos_c)
+nx.draw_networkx_nodes(G,pos,node_shape='s',node_size=10,node_color='b',nodelist=nodos_f)
+
+
+# edges
+nx.draw_networkx_edges(G,pos,edgelist=edges,edge_color='g',width=1)
+# edges labels
+#nx.draw_networkx_edge_labels(G, pos, edge_labels=edge_labels,
+#								label_pos=0.5, font_size=6, font_color='k', 
+#								font_family='sans-serif', font_weight='normal', 
+#								alpha=1.0, bbox=None, ax=None, rotate=True)
+# labels
+nx.draw_networkx_labels(G,pos,font_size=6,font_family='sans-serif',nodelist=nodos_c)
+
+file_name = './img/followers_network.png'
+
+
+plt.axis('off')
+
+plt.savefig(file_name, dpi=200) # save as png
+
+#plt.show()
+
+
+"""
